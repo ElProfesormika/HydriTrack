@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Plan Compteurs - HydroTrack</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+    <style>
+      body {
+        margin: 0;
+        font-family: Arial, sans-serif;
+        background: #f7f9fc;
+        color: #0f2545;
+      }
+      .container {
+        max-width: 1200px;
+        margin: 20px auto;
+        padding: 0 16px;
+      }
+      h1 {
+        margin: 0 0 8px;
+      }
+      p {
+        margin: 0 0 16px;
+      }
+      #map-compteurs {
+        height: 75vh;
+        border: 1px solid #c8d7eb;
+        border-radius: 10px;
+        background: #fff;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>Plan des compteurs d'eau</h1>
+      <p>Fond de carte base sur le plan reel (coordonnees image x, y).</p>
+      <div id="map-compteurs"></div>
+    </div>
+
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
+    <script src="/js/plan-map.js"></script>
+    <script>
+      // Tableau dynamique: ajoute ici de nouveaux compteurs
+      const compteurs = [
+        { id: "CPT-001", nom: "Compteur principal A", x: 820, y: 560 },
+        { id: "CPT-002", nom: "Compteur atelier B", x: 1180, y: 760 },
+        { id: "CPT-003", nom: "Compteur reservoir C", x: 1590, y: 460 },
+      ];
+
+      createPlanMap({
+        mapId: "map-compteurs",
+        imageUrl: "/plans/plan-compteurs.png",
+        markers: compteurs,
+      });
+    </script>
+  </body>
+</html>

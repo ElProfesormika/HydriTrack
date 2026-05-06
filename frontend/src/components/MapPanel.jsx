@@ -1,20 +1,52 @@
-import { CircleMarker, MapContainer, Marker, Popup, TileLayer } from "react-leaflet";
+import { CRS } from "leaflet";
+import { CircleMarker, ImageOverlay, MapContainer, Marker, Popup } from "react-leaflet";
+import { PLAN_BOUNDS, PLAN_HEIGHT, PLAN_WIDTH, ZONE_PLAN_POINTS } from "./sitePlanCoordinates";
+const PLAN_CAPTEURS_URL = "/plans/plan-capteurs.png";
+
+function toZoneImageCoords(zones) {
+  return (zones || []).map((zone, index) => {
+    const fromLookup = ZONE_PLAN_POINTS[zone.id];
+    if (fromLookup) return { ...zone, ...fromLookup };
+    return { ...zone, x: 240 + (index % 8) * 60, y: 420 + Math.floor(index / 8) * 60 };
+  });
+}
+
+function toAlertImageCoords(alerts) {
+  return (alerts || []).map((alert, index) => {
+    const base = ZONE_PLAN_POINTS[alert.zone_id] || { x: 470, y: 500 };
+    const spreadX = (index % 3) * 14 - 14;
+    const spreadY = Math.floor(index / 3) * 10;
+    return {
+      ...alert,
+      x: Math.max(30, Math.min(PLAN_WIDTH - 30, base.x + spreadX)),
+      y: Math.max(30, Math.min(PLAN_HEIGHT - 30, base.y + spreadY)),
+    };
+  });
+}
 
 export function MapPanel({ zones, alerts, title = "Cartographie du reseau", caption }) {
+  const zonesImageCoords = toZoneImageCoords(zones);
+  const alertsImageCoords = toAlertImageCoords(alerts);
+
   return (
     <section className="card map-panel">
       <h3>{title}</h3>
       {caption ? <p className="map-caption">{caption}</p> : null}
-      <MapContainer center={[48.505, 3.53]} zoom={13} style={{ height: 420, width: "100%" }}>
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
+      <MapContainer
+        center={[PLAN_HEIGHT / 2, PLAN_WIDTH / 2]}
+        zoom={-1}
+        crs={CRS.Simple}
+        minZoom={-3}
+        maxZoom={2}
+        maxBounds={PLAN_BOUNDS}
+        style={{ height: 420, width: "100%" }}
+      >
+        <ImageOverlay url={PLAN_CAPTEURS_URL} bounds={PLAN_BOUNDS} />
 
-        {zones.map((zone) => (
+        {zonesImageCoords.map((zone) => (
           <CircleMarker
             key={zone.id}
-            center={[zone.lat, zone.lng]}
+            center={[zone.y, zone.x]}
             radius={7}
             pathOptions={{ color: "#3b82f6", fillColor: "#60a5fa", fillOpacity: 0.9 }}
           >
@@ -22,8 +54,8 @@ export function MapPanel({ zones, alerts, title = "Cartographie du reseau", capt
           </CircleMarker>
         ))}
 
-        {alerts.map((alert, idx) => (
-          <Marker key={`${alert.zone_id}-${idx}`} position={[alert.lat, alert.lng]}>
+        {alertsImageCoords.map((alert, idx) => (
+          <Marker key={`${alert.zone_id}-${idx}`} position={[alert.y, alert.x]}>
             <Popup>
               <strong>{alert.zone_name}</strong>
               <br />
