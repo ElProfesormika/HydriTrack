@@ -75,6 +75,8 @@ NETWORK_METERS = [
     for idx, name in enumerate(_METER_NAMES)
 ]
 
+NETWORK_METER_IDS = [m["meter_id"] for m in NETWORK_METERS]
+
 
 @app.get("/health")
 def health() -> dict[str, str]:
@@ -144,6 +146,30 @@ def get_meter_flow_series(bucket_minutes: int = 60, points: int = 24) -> dict:
     return {"count": len(items), "items": items}
 
 
+@app.get("/api/dashboard/meter-flow-per-meter")
+def get_meter_flow_per_meter(bucket_minutes: int = 60, points: int = 72) -> dict:
+    return store.get_meter_flow_per_meter(
+        bucket_minutes=bucket_minutes,
+        points=points,
+        meter_order=NETWORK_METER_IDS,
+    )
+
+
+@app.get("/api/dashboard/meter-profile/{meter_id}")
+def get_meter_profile(
+    meter_id: str,
+    bucket_minutes: int = 30,
+    points: int = 48,
+    recent_limit: int = 12,
+) -> dict:
+    return store.get_meter_profile(
+        meter_id=meter_id,
+        bucket_minutes=bucket_minutes,
+        points=points,
+        recent_limit=recent_limit,
+    )
+
+
 @app.get("/api/dashboard/pressure-series")
 def get_pressure_series(bucket_minutes: int = 60, points: int = 24) -> dict:
     items = store.get_pressure_timeseries(bucket_minutes=bucket_minutes, points=points)
@@ -155,6 +181,12 @@ def get_alert_stats() -> dict:
     return store.get_alert_stats()
 
 
+@app.get("/api/dashboard/sensors-catalog")
+def get_sensors_catalog() -> dict:
+    items = store.get_sensors_catalog()
+    return {"count": len(items), "items": items}
+
+
 @app.get("/api/map/zones")
 def get_map_zones() -> dict:
     return {"count": len(NETWORK_ZONES), "items": NETWORK_ZONES}
@@ -163,7 +195,7 @@ def get_map_zones() -> dict:
 @app.get("/api/map/alerts")
 def get_map_alerts(limit: int = 50) -> dict:
     alerts = store.get_alerts(limit=limit)
-    leak_items = [item for item in alerts if "leak" in item.get("category", "")]
+    leak_items = [item for item in alerts if "leak" in str(item.get("category") or "").lower()]
     items = []
     for idx, item in enumerate(leak_items):
         zone = NETWORK_ZONES[idx % len(NETWORK_ZONES)]
@@ -190,7 +222,7 @@ def get_map_meters() -> dict:
 async def create_test_alert() -> dict:
     alert = Alert(
         timestamp=datetime.now(timezone.utc),
-        severity="info",
+        severity="normal",
         category="anomaly",
         source_id="SYSTEM",
         message="Alerte de test HydroTrack",

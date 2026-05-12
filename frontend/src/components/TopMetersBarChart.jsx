@@ -1,5 +1,7 @@
 import { Bar } from "react-chartjs-2";
 
+import { barColorFromAvgScore } from "../utils/riskLevels";
+
 const chartText = "#0d47a1";
 const chartGrid = "rgba(13, 71, 161, 0.12)";
 
@@ -11,8 +13,8 @@ export function TopMetersBarChart({ items, title = "Compteurs les plus signales 
       {
         label: "Nombre d'anomalies",
         data: (items || []).map((r) => Number(r.anomaly_count || 0)),
-        backgroundColor: "rgba(21, 101, 192, 0.55)",
-        borderColor: "#0d47a1",
+        backgroundColor: (items || []).map((r) => barColorFromAvgScore(r.avg_score)),
+        borderColor: "rgba(13, 71, 161, 0.45)",
         borderWidth: 1,
         borderRadius: 6,
       },

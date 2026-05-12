@@ -5,7 +5,7 @@ export function AppLayout({ children }) {
     <div className="app-shell">
       <aside className="sidebar">
         <h1>HydroTrack</h1>
-        <p>Surveillance reseau eau EDF-CNPE</p>
+        <p>Surveillance reseau eau - EDF CNPE</p>
         <nav>
           <div className="nav-section-label">Tableaux de bord</div>
           <NavLink to="/dashboard" end className={({ isActive }) => (isActive ? "active" : "")}>
@@ -21,7 +21,7 @@ export function AppLayout({ children }) {
             Alertes
           </NavLink>
           <NavLink to="/dashboard/detection" className={({ isActive }) => (isActive ? "active" : "")}>
-            Detection ML
+            Detection IA
           </NavLink>
           <div className="nav-section-label">Cartographie</div>
           <NavLink to="/cartographie" className={({ isActive }) => (isActive ? "active" : "")}>

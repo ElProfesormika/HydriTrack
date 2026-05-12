@@ -1,5 +1,6 @@
 import { CRS } from "leaflet";
 import { CircleMarker, ImageOverlay, MapContainer, Popup } from "react-leaflet";
+import { PlanMapFitBounds } from "./PlanMapFit";
 import { METER_PLAN_POINTS, PLAN_BOUNDS, PLAN_HEIGHT, PLAN_WIDTH } from "./sitePlanCoordinates";
 const PLAN_COMPTEURS_URL = "/plans/plan-compteurs.png";
 
@@ -11,20 +12,32 @@ function toMeterImageCoords(meters) {
   });
 }
 
+function latestAnomalyForMeter(meterId, anomalies) {
+  const rows = (anomalies || []).filter((a) => a.meter_id === meterId);
+  if (!rows.length) return null;
+  return rows.reduce((best, cur) => {
+    const tb = new Date(best.timestamp || 0).getTime();
+    const tc = new Date(cur.timestamp || 0).getTime();
+    return tc >= tb ? cur : best;
+  });
+}
+
 function riskForMeter(meterId, anomalies) {
   if (!anomalies?.length) return "normal";
-  const match = anomalies.find((a) => a.meter_id === meterId);
+  const match = latestAnomalyForMeter(meterId, anomalies);
   if (!match) return "normal";
   const p = Number(match.leak_probability || 0);
-  if (p >= 0.75) return "high";
-  if (p >= 0.5) return "medium";
+  if (p >= 0.75) return "critical";
+  if (p >= 0.5) return "warning";
+  if (p >= 0.25) return "caution";
   return "normal";
 }
 
 const pathByRisk = {
-  normal: { color: "#1565c0", fillColor: "#1976d2", fillOpacity: 0.85 },
-  medium: { color: "#f57c00", fillColor: "#ff9800", fillOpacity: 0.9 },
-  high: { color: "#c62828", fillColor: "#e53935", fillOpacity: 0.95 },
+  normal: { color: "#2e7d32", fillColor: "#43a047", fillOpacity: 0.88 },
+  caution: { color: "#f9a825", fillColor: "#ffca28", fillOpacity: 0.92 },
+  warning: { color: "#ef6c00", fillColor: "#ff9800", fillOpacity: 0.93 },
+  critical: { color: "#c62828", fillColor: "#e53935", fillOpacity: 0.96 },
 };
 
 export function MeterMapPanel({
@@ -39,32 +52,47 @@ export function MeterMapPanel({
     <section className="card map-panel">
       <h3>{title}</h3>
       {caption ? <p className="map-caption">{caption}</p> : null}
-      <MapContainer
-        center={[PLAN_HEIGHT / 2, PLAN_WIDTH / 2]}
-        zoom={-1}
-        crs={CRS.Simple}
-        minZoom={-3}
-        maxZoom={2}
-        maxBounds={PLAN_BOUNDS}
-        style={{ height: 420, width: "100%" }}
-      >
-        <ImageOverlay url={PLAN_COMPTEURS_URL} bounds={PLAN_BOUNDS} />
-        {metersImageCoords.map((m) => {
+      <div className="map-panel-fill" style={{ aspectRatio: `${PLAN_WIDTH} / ${PLAN_HEIGHT}` }}>
+        <MapContainer
+          center={[PLAN_HEIGHT / 2, PLAN_WIDTH / 2]}
+          zoom={-1}
+          crs={CRS.Simple}
+          minZoom={-4}
+          maxZoom={3}
+          maxBounds={PLAN_BOUNDS}
+          className="map-leaflet"
+        >
+          <PlanMapFitBounds bounds={PLAN_BOUNDS} />
+          <ImageOverlay url={PLAN_COMPTEURS_URL} bounds={PLAN_BOUNDS} />
+          {metersImageCoords.map((m) => {
           const risk = riskForMeter(m.meter_id, anomalies);
           const opts = pathByRisk[risk];
           return (
-            <CircleMarker key={m.id} center={[m.y, m.x]} radius={risk === "high" ? 9 : 7} pathOptions={opts}>
+            <CircleMarker
+              key={m.id}
+              center={[m.y, m.x]}
+              radius={risk === "critical" ? 10 : risk === "warning" ? 8 : 7}
+              pathOptions={opts}
+            >
               <Popup>
                 <strong>{m.name}</strong>
                 <br />
                 ID: {m.meter_id}
                 <br />
-                Etat: {risk === "high" ? "Critique" : risk === "medium" ? "Surveillance" : "Normal"}
+                Etat:{" "}
+                {risk === "critical"
+                  ? "Critique"
+                  : risk === "warning"
+                    ? "Attention"
+                    : risk === "caution"
+                      ? "Vigilance"
+                      : "Normal"}
               </Popup>
             </CircleMarker>
           );
-        })}
-      </MapContainer>
+          })}
+        </MapContainer>
+      </div>
     </section>
   );
 }

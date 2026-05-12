@@ -1,8 +1,11 @@
 import { Doughnut } from "react-chartjs-2";
 
 const palette = {
-  info: "#1565c0",
-  warning: "#0277bd",
+  normal: "#2e7d32",
+  nominal: "#2e7d32",
+  info: "#2e7d32",
+  caution: "#f9a825",
+  warning: "#ef6c00",
   critical: "#c62828",
 };
 

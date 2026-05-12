@@ -1,5 +1,7 @@
 import { AlertSeverityChart } from "../components/AlertSeverityChart";
+import { DashboardHeader } from "../components/DashboardHeader";
 import { EventList } from "../components/EventList";
+import { InsightCard } from "../components/InsightCard";
 import { KpiCard } from "../components/KpiCard";
 import { useRealtimeDashboard } from "../hooks/useRealtimeDashboard";
 
@@ -9,18 +11,11 @@ export function DashboardAlertesPage() {
 
   return (
     <div className="page">
-      <header className="page-header">
-        <div>
-          <h2>Dashboard alertes & incidents</h2>
-          <p>
-            Vue operationnelle des incidents reseau : gravite, categories, volume sur 24 h et fil direct vers les
-            notifications temps reel.
-          </p>
-        </div>
-        <div className={`connection-pill ${isConnected ? "online" : "offline"}`}>
-          {isConnected ? "Flux temps reel" : "Hors ligne"}
-        </div>
-      </header>
+      <DashboardHeader
+        title="Alertes et incidents"
+        description="Vision priorisee des alertes reseau : gravite, categories, volume 24h et journal de suivi."
+        isConnected={isConnected}
+      />
 
       {error ? <p className="error-box">{error}</p> : null}
 
@@ -33,8 +28,7 @@ export function DashboardAlertesPage() {
 
       <section className="split-grid">
         <AlertSeverityChart bySeverity={alertStats?.by_severity} />
-        <article className="card">
-          <h3>Alertes par categorie</h3>
+        <InsightCard title="Alertes par categorie">
           <div className="stat-inline">
             {(alertStats?.by_category || []).map((row) => (
               <div key={row.category} className="stat-pill">
@@ -44,10 +38,25 @@ export function DashboardAlertesPage() {
             ))}
             {!(alertStats?.by_category || []).length ? <p className="empty-chart">Aucune categorie pour le moment.</p> : null}
           </div>
-        </article>
+        </InsightCard>
       </section>
 
-      <EventList title="Journal des alertes" items={alerts} mode="alerts" />
+      <section className="split-grid">
+        <EventList title="Journal des alertes" items={alerts} mode="alerts" />
+        <InsightCard title="Sources les plus actives">
+          <div className="stat-inline">
+            {(overview?.top_alert_sources || []).slice(0, 6).map((row) => (
+              <div key={row.source_id} className="stat-pill">
+                <strong>{row.alert_count}</strong>
+                <span>{row.source_id}</span>
+              </div>
+            ))}
+            {!(overview?.top_alert_sources || []).length ? (
+              <p className="empty-chart">Aucune source signalee pour le moment.</p>
+            ) : null}
+          </div>
+        </InsightCard>
+      </section>
     </div>
   );
 }

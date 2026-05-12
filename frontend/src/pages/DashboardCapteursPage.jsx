@@ -1,4 +1,6 @@
+import { DashboardHeader } from "../components/DashboardHeader";
 import { EventList } from "../components/EventList";
+import { InsightCard } from "../components/InsightCard";
 import { KpiCard } from "../components/KpiCard";
 import { PressureIntensityChart } from "../components/PressureIntensityChart";
 import { useRealtimeDashboard } from "../hooks/useRealtimeDashboard";
@@ -13,18 +15,11 @@ export function DashboardCapteursPage() {
 
   return (
     <div className="page">
-      <header className="page-header">
-        <div>
-          <h2>Dashboard capteurs pression</h2>
-          <p>
-            Suivi des ondes de pression par zone : intensite, frequence, couverture capteurs et correlation avec les
-            alertes de fuite confirmee.
-          </p>
-        </div>
-        <div className={`connection-pill ${isConnected ? "online" : "offline"}`}>
-          {isConnected ? "Flux temps reel" : "Hors ligne"}
-        </div>
-      </header>
+      <DashboardHeader
+        title="Suivi capteurs pression"
+        description="Analyse des signaux de pression par zone (intensite, frequence, couverture) et impact sur le risque de fuite."
+        isConnected={isConnected}
+      />
 
       {error ? <p className="error-box">{error}</p> : null}
 
@@ -40,13 +35,12 @@ export function DashboardCapteursPage() {
 
       <section className="split-grid">
         <EventList title="Alertes liees aux capteurs / fuites" items={pressureAlerts.length ? pressureAlerts : alerts} mode="alerts" />
-        <article className="card">
-          <h3>Logique metier</h3>
-          <p style={{ color: "var(--muted)", marginTop: 0 }}>
+        <InsightCard title="Logique metier">
+          <p className="map-caption">
             Chaque nouveau lot pression declenche analyse signal, correlation inter-capteurs et mise a jour carte. Les
             seuils critiques alimentent les alertes geolocalisees sur la page Cartographie.
           </p>
-        </article>
+        </InsightCard>
       </section>
     </div>
   );

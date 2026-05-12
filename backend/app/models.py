@@ -22,7 +22,7 @@ class PressureDataIn(BaseModel):
 
 class Alert(BaseModel):
     timestamp: datetime
-    severity: Literal["info", "warning", "critical"]
+    severity: Literal["normal", "caution", "warning", "critical"]
     category: Literal["anomaly", "leak_suspected", "leak_confirmed"]
     source_id: str
     message: str

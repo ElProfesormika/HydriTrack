@@ -36,6 +36,7 @@ class InMemoryStore:
         self.anomalies.append(anomaly)
         self.sqlite.insert_anomaly(anomaly)
 
+        # Gravité en 4 niveaux : normal / vigilance / attention / critique
         if leak_probability >= 0.75:
             alert = Alert(
                 timestamp=datetime.now(timezone.utc),
@@ -43,7 +44,7 @@ class InMemoryStore:
                 category="leak_suspected",
                 source_id=payload.meter_id,
                 message=(
-                    f"Fuite suspectee sur {payload.meter_id} "
+                    f"Fuite suspectee critique sur {payload.meter_id} "
                     f"(probabilite={leak_probability:.2f})"
                 ),
             )
@@ -55,7 +56,36 @@ class InMemoryStore:
                 severity="warning",
                 category="anomaly",
                 source_id=payload.meter_id,
-                message=f"Anomalie detectee sur {payload.meter_id}",
+                message=(
+                    f"Anomalie significative sur {payload.meter_id} "
+                    f"(probabilite={leak_probability:.2f})"
+                ),
+            )
+            self.alerts.append(alert)
+            self.sqlite.insert_alert(alert)
+        elif leak_probability >= 0.25:
+            alert = Alert(
+                timestamp=datetime.now(timezone.utc),
+                severity="caution",
+                category="anomaly",
+                source_id=payload.meter_id,
+                message=(
+                    f"Surveillance renforcee sur {payload.meter_id} "
+                    f"(probabilite={leak_probability:.2f})"
+                ),
+            )
+            self.alerts.append(alert)
+            self.sqlite.insert_alert(alert)
+        elif leak_probability >= 0.1:
+            alert = Alert(
+                timestamp=datetime.now(timezone.utc),
+                severity="normal",
+                category="anomaly",
+                source_id=payload.meter_id,
+                message=(
+                    f"Leve legere sur {payload.meter_id} "
+                    f"(probabilite={leak_probability:.2f})"
+                ),
             )
             self.alerts.append(alert)
             self.sqlite.insert_alert(alert)
@@ -63,6 +93,7 @@ class InMemoryStore:
         return {
             "anomaly_score": round(anomaly_score, 2),
             "leak_probability": round(leak_probability, 2),
+            "ml_model": "IsolationForest(n=300)+seuils quantiles decision (HydroTrack IA)",
         }
 
     def ingest_pressure(self, payload: PressureDataIn) -> dict[str, Any]:
@@ -79,6 +110,29 @@ class InMemoryStore:
                     f"Fuite confirmee dans la zone {payload.zone} "
                     f"(capteur={payload.sensor_id})"
                 ),
+            )
+            self.alerts.append(alert)
+            self.sqlite.insert_alert(alert)
+        elif payload.intensity >= 70 and payload.frequency >= 10:
+            alert = Alert(
+                timestamp=datetime.now(timezone.utc),
+                severity="warning",
+                category="leak_suspected",
+                source_id=payload.sensor_id,
+                message=(
+                    f"Signal de pression eleve zone {payload.zone} "
+                    f"(capteur={payload.sensor_id})"
+                ),
+            )
+            self.alerts.append(alert)
+            self.sqlite.insert_alert(alert)
+        elif payload.intensity >= 55:
+            alert = Alert(
+                timestamp=datetime.now(timezone.utc),
+                severity="caution",
+                category="anomaly",
+                source_id=payload.sensor_id,
+                message=f"Variation pression zone {payload.zone} (capteur={payload.sensor_id})",
             )
             self.alerts.append(alert)
             self.sqlite.insert_alert(alert)
@@ -123,5 +177,34 @@ class InMemoryStore:
     def get_pressure_timeseries(self, bucket_minutes: int = 60, points: int = 24) -> list[dict]:
         return self.sqlite.pressure_intensity_timeseries(bucket_minutes=bucket_minutes, points=points)
 
+    def get_meter_flow_per_meter(
+        self,
+        bucket_minutes: int = 60,
+        points: int = 72,
+        meter_order: list[str] | None = None,
+    ) -> dict:
+        return self.sqlite.meter_flow_per_meter_series(
+            bucket_minutes=bucket_minutes,
+            points=points,
+            meter_order=meter_order,
+        )
+
     def get_alert_stats(self) -> dict:
         return self.sqlite.alert_stats()
+
+    def get_sensors_catalog(self) -> list[dict]:
+        return self.sqlite.sensors_catalog()
+
+    def get_meter_profile(
+        self,
+        meter_id: str,
+        bucket_minutes: int = 30,
+        points: int = 48,
+        recent_limit: int = 12,
+    ) -> dict:
+        return self.sqlite.meter_profile(
+            meter_id=meter_id,
+            bucket_minutes=bucket_minutes,
+            points=points,
+            recent_limit=recent_limit,
+        )
