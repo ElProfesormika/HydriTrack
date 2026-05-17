@@ -1,10 +1,10 @@
-import math
 from datetime import datetime, timezone
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from .models import Alert, MeterDataIn, PressureDataIn
+from . import admin_routes
+from .models import Alert, MeterDataIn, MeterReadingIn, MeterReadingUpdate, PressureDataIn
 from .services import InMemoryStore
 
 app = FastAPI(title="HydroTrack API", version="0.1.0")
@@ -20,72 +20,69 @@ app.add_middleware(
     allow_headers=["*"],
 )
 store = InMemoryStore()
+admin_routes.bind_admin_store(store)
 ws_clients: list[WebSocket] = []
-
-NETWORK_ZONES = [
-    {"id": 1, "name": "Zone 1 - CRT", "lat": 48.496, "lng": 3.503},
-    {"id": 2, "name": "Zone 2 - Entreprise", "lat": 48.498, "lng": 3.508},
-    {"id": 3, "name": "Zone 3 - AIE", "lat": 48.499, "lng": 3.513},
-    {"id": 4, "name": "Zone 4 - Aire TFA / Vigilia", "lat": 48.501, "lng": 3.517},
-    {"id": 5, "name": "Zone 5 - IPE", "lat": 48.502, "lng": 3.522},
-    {"id": 6, "name": "Zone 6 - TR 3 / TR 4", "lat": 48.504, "lng": 3.526},
-    {"id": 7, "name": "Zone 7 - TR 2", "lat": 48.505, "lng": 3.531},
-    {"id": 8, "name": "Zone 8 - TR 1", "lat": 48.507, "lng": 3.536},
-    {"id": 9, "name": "Zone 9 - Refrigerants", "lat": 48.509, "lng": 3.541},
-    {"id": 10, "name": "Zone 10 - BTE", "lat": 48.510, "lng": 3.546},
-    {"id": 11, "name": "Zone 11 - SUT / PAP", "lat": 48.512, "lng": 3.551},
-    {"id": 12, "name": "Zone 12 - MIF / Restaurant", "lat": 48.514, "lng": 3.556},
-    {"id": 13, "name": "Zone 13 - Accueil / Parking / Simulateur / CIP", "lat": 48.516, "lng": 3.561},
-]
-
-_METER_NAMES = [
-    "AMPERE_1",
-    "AMPERE_2",
-    "BCA1",
-    "BCA2",
-    "BECQUEREL",
-    "CCAS",
-    "CHARPAK",
-    "EINSTEIN",
-    "SIMULATEUR",
-    "FARADAY",
-    "FRANKLIN",
-    "JOLIOT_CURIE_1",
-    "JOLIOT_CURIE_2",
-    "NEWTON",
-    "PAP",
-    "VOLTA",
-    "AVOGADRO",
-    "EDISON",
-    "COULOMB1",
-    "COULOMB2",
-    "TREMPLIN",
-    "SALLE_MUSCULATION",
-]
-_BASE_LAT = 48.505
-_BASE_LNG = 3.53
-NETWORK_METERS = [
-    {
-        "id": idx + 1,
-        "meter_id": name,
-        "name": name.replace("_", " "),
-        "lat": _BASE_LAT + 0.009 * math.sin(2 * math.pi * idx / len(_METER_NAMES)),
-        "lng": _BASE_LNG + 0.014 * math.cos(2 * math.pi * idx / len(_METER_NAMES)),
-    }
-    for idx, name in enumerate(_METER_NAMES)
-]
-
-NETWORK_METER_IDS = [m["meter_id"] for m in NETWORK_METERS]
-
+app.include_router(admin_routes.router)
 
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/api/meter-readings")
+def list_meter_readings(limit: int = 10, meter_id: str | None = None) -> dict:
+    items = store.list_meter_readings(limit=limit, meter_id=meter_id)
+    return {"count": len(items), "items": items}
+
+
+@app.get("/api/meter-readings/{reading_id}")
+def get_meter_reading(reading_id: int) -> dict:
+    item = store.get_meter_reading(reading_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Releve introuvable")
+    return item
+
+
+@app.post("/api/meter-readings")
+async def create_meter_reading(payload: MeterReadingIn) -> dict:
+    if payload.meter_id not in store.registry.meter_ids:
+        raise HTTPException(status_code=400, detail=f"Compteur non autorise: {payload.meter_id}")
+    try:
+        result = store.create_meter_reading(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    await _broadcast({"type": "meter_reading", "action": "created", "reading": result["reading"]})
+    return {"status": "created", **result}
+
+
+@app.put("/api/meter-readings/{reading_id}")
+async def update_meter_reading(reading_id: int, payload: MeterReadingUpdate) -> dict:
+    try:
+        result = store.update_meter_reading(reading_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=404 if "introuvable" in str(exc) else 400, detail=str(exc)) from exc
+    await _broadcast({"type": "meter_reading", "action": "updated", "reading": result["reading"]})
+    return {"status": "updated", **result}
+
+
+@app.delete("/api/meter-readings/{reading_id}")
+async def delete_meter_reading(reading_id: int) -> dict:
+    try:
+        result = store.delete_meter_reading(reading_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await _broadcast({"type": "meter_reading", "action": "deleted", "reading_id": reading_id})
+    return {"status": "deleted", **result}
+
+
 @app.post("/api/meters/data")
 async def ingest_meter_data(payload: MeterDataIn) -> dict:
-    result = store.ingest_meter(payload)
+    if payload.meter_id not in store.registry.meter_ids:
+        raise HTTPException(status_code=400, detail=f"Compteur non autorise: {payload.meter_id}")
+    try:
+        result = store.ingest_meter(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     await _broadcast(
         {
             "type": "meter_data",
@@ -151,7 +148,7 @@ def get_meter_flow_per_meter(bucket_minutes: int = 60, points: int = 72) -> dict
     return store.get_meter_flow_per_meter(
         bucket_minutes=bucket_minutes,
         points=points,
-        meter_order=NETWORK_METER_IDS,
+        meter_order=store.registry.meter_ids,
     )
 
 
@@ -187,35 +184,39 @@ def get_sensors_catalog() -> dict:
     return {"count": len(items), "items": items}
 
 
+@app.get("/api/dashboard/zone-sensors")
+def get_zone_sensors_status() -> dict:
+    items = store.get_zone_sensor_status()
+    return {"count": len(items), "items": items}
+
+
+@app.get("/api/network/topology")
+def get_network_topology() -> dict:
+    return store.get_network_topology()
+
+
+@app.get("/api/leaks/localizations")
+def get_leak_localizations(limit: int = 20, confirmed_only: bool = False) -> dict:
+    items = store.get_leak_localizations(limit=limit, confirmed_only=confirmed_only)
+    return {"count": len(items), "items": items}
+
+
 @app.get("/api/map/zones")
 def get_map_zones() -> dict:
-    return {"count": len(NETWORK_ZONES), "items": NETWORK_ZONES}
+    items = store.get_map_zones_enriched()
+    return {"count": len(items), "items": items}
 
 
 @app.get("/api/map/alerts")
 def get_map_alerts(limit: int = 50) -> dict:
-    alerts = store.get_alerts(limit=limit)
-    leak_items = [item for item in alerts if "leak" in str(item.get("category") or "").lower()]
-    items = []
-    for idx, item in enumerate(leak_items):
-        zone = NETWORK_ZONES[idx % len(NETWORK_ZONES)]
-        items.append(
-            {
-                "zone_id": zone["id"],
-                "zone_name": zone["name"],
-                "lat": zone["lat"] + idx * 0.0006,
-                "lng": zone["lng"] + idx * 0.0004,
-                "severity": item.get("severity", "warning"),
-                "message": item.get("message", ""),
-                "timestamp": item.get("timestamp"),
-            }
-        )
+    items = store.get_map_leak_markers(limit=limit)
     return {"count": len(items), "items": items}
 
 
 @app.get("/api/map/meters")
 def get_map_meters() -> dict:
-    return {"count": len(NETWORK_METERS), "items": NETWORK_METERS}
+    items = store.get_map_meter_items()
+    return {"count": len(items), "items": items}
 
 
 @app.post("/api/alerts/test")

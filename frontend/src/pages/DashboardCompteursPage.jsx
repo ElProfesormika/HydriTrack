@@ -1,16 +1,22 @@
+import { useEffect, useRef } from "react";
+import { useSearchParams } from "react-router-dom";
+
 import { DashboardHeader } from "../components/DashboardHeader";
 import { EventList } from "../components/EventList";
 import { InsightCard } from "../components/InsightCard";
 import { KpiCard } from "../components/KpiCard";
 import { MeterDeepDivePanel } from "../components/MeterDeepDivePanel";
 import { MeterFlowChart } from "../components/MeterFlowChart";
-import { MeterReadingForm } from "../components/MeterReadingForm";
+import { Link } from "react-router-dom";
 import { MetersTrendChart } from "../components/MetersTrendChart";
 import { TopMetersBarChart } from "../components/TopMetersBarChart";
 import { VariationChart } from "../components/VariationChart";
 import { useRealtimeDashboard } from "../hooks/useRealtimeDashboard";
 
 export function DashboardCompteursPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const deepDiveRef = useRef(null);
+  const scrolledFromMapRef = useRef(false);
   const {
     overview,
     timeseries,
@@ -29,6 +35,28 @@ export function DashboardCompteursPage() {
   const meter = overview?.meter_kpis || {};
   const topMeters = overview?.top_anomalous_meters || [];
   const meterOptions = (mapMeters || []).map((m) => m.meter_id).filter(Boolean);
+  const meterFromUrl = searchParams.get("meter");
+
+  useEffect(() => {
+    if (!meterFromUrl || !meterOptions.length) return;
+    if (!meterOptions.includes(meterFromUrl)) return;
+    if (meterFromUrl !== selectedMeterId) {
+      scrolledFromMapRef.current = false;
+      setSelectedMeter(meterFromUrl);
+    }
+  }, [meterFromUrl, meterOptions, selectedMeterId, setSelectedMeter]);
+
+  useEffect(() => {
+    if (!meterFromUrl || !selectedMeterProfile || scrolledFromMapRef.current) return;
+    if (selectedMeterId !== meterFromUrl) return;
+    deepDiveRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    scrolledFromMapRef.current = true;
+  }, [meterFromUrl, selectedMeterId, selectedMeterProfile]);
+
+  function handleMeterChange(meterId) {
+    setSelectedMeter(meterId);
+    setSearchParams(meterId ? { meter: meterId } : {}, { replace: true });
+  }
 
   return (
     <div className="page">
@@ -40,7 +68,15 @@ export function DashboardCompteursPage() {
 
       {error ? <p className="error-box">{error}</p> : null}
 
-      <MeterReadingForm onSaved={refresh} />
+      <article className="card releves-promo-card">
+        <h3>Saisie des releves</h3>
+        <p className="map-caption">
+          Ajoutez ou modifiez les releves manuels sur la page dediee (historique des 10 derniers enregistrements).
+        </p>
+        <Link to="/releves" className="btn-primary releves-promo-link">
+          Ouvrir la page Releves
+        </Link>
+      </article>
 
       <section className="kpi-grid">
         <KpiCard title="Compteurs distincts" value={meter.distinct_meters || 0} subtitle="Identifiants actifs" />
@@ -56,12 +92,14 @@ export function DashboardCompteursPage() {
       </section>
 
       <MetersTrendChart buckets={meterFlowPerMeter?.buckets} series={meterFlowPerMeter?.series} />
-      <MeterDeepDivePanel
-        meterId={selectedMeterId}
-        meterOptions={meterOptions}
-        profile={selectedMeterProfile}
-        onChangeMeter={setSelectedMeter}
-      />
+      <div ref={deepDiveRef} id="suivi-detail-compteur" className="suivi-detail-anchor">
+        <MeterDeepDivePanel
+          meterId={selectedMeterId}
+          meterOptions={meterOptions}
+          profile={selectedMeterProfile}
+          onChangeMeter={handleMeterChange}
+        />
+      </div>
 
       <VariationChart timeseries={timeseries} />
 

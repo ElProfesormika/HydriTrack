@@ -14,6 +14,9 @@ export function AppLayout({ children }) {
           <NavLink to="/dashboard/compteurs" className={({ isActive }) => (isActive ? "active" : "")}>
             Compteurs
           </NavLink>
+          <NavLink to="/releves" className={({ isActive }) => (isActive ? "active" : "")}>
+            Releves
+          </NavLink>
           <NavLink to="/dashboard/capteurs" className={({ isActive }) => (isActive ? "active" : "")}>
             Capteurs pression
           </NavLink>
@@ -26,6 +29,10 @@ export function AppLayout({ children }) {
           <div className="nav-section-label">Cartographie</div>
           <NavLink to="/cartographie" className={({ isActive }) => (isActive ? "active" : "")}>
             Cartes reseau
+          </NavLink>
+          <div className="nav-section-label">Administration</div>
+          <NavLink to="/admin" className={({ isActive }) => `nav-admin-link ${isActive ? "active" : ""}`}>
+            Panneau admin
           </NavLink>
         </nav>
       </aside>

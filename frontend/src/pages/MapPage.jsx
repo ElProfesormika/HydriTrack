@@ -21,13 +21,13 @@ export function MapPage() {
           zones={mapZones}
           alerts={mapAlerts}
           title="Carte capteurs & zones"
-          caption="Zones capteurs et alertes replacees sur le plan central."
+          caption="Zones entre compteurs (bleu/orange/rouge). Marqueurs = fuites localisees avec distance sur le troncon."
         />
         <MeterMapPanel
           meters={mapMeters}
           anomalies={anomalies}
           title="Carte des compteurs"
-          caption="Compteurs du site principal avec code couleur des anomalies."
+          caption="Survolez un point pour voir nom, etat et dates. Couleur = niveau de risque ML. Clic pour le suivi detaille."
         />
       </div>
     </div>

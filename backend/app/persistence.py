@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import Alert, Anomaly, MeterDataIn, PressureDataIn
+from .network_config import NETWORK_METER_IDS
 
 
 class SQLiteStore:
@@ -16,7 +17,11 @@ class SQLiteStore:
         self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.RLock()
+        self._active_meter_ids: list[str] = list(NETWORK_METER_IDS)
         self._create_tables()
+
+    def set_active_meter_ids(self, meter_ids: list[str]) -> None:
+        self._active_meter_ids = meter_ids or list(NETWORK_METER_IDS)
 
     def _execute_commit(self, sql: str, params: tuple[Any, ...]) -> None:
         with self._lock:
@@ -30,6 +35,13 @@ class SQLiteStore:
     def _fetchone(self, sql: str, params: tuple[Any, ...] = ()) -> sqlite3.Row:
         with self._lock:
             return self._conn.execute(sql, params).fetchone()
+
+    def _meter_filter_sql(self) -> tuple[str, list[str]]:
+        ids = self._active_meter_ids or list(NETWORK_METER_IDS)
+        if not ids:
+            return "1=0", []
+        placeholders = ",".join("?" * len(ids))
+        return f"meter_id IN ({placeholders})", list(ids)
 
     def _create_tables(self) -> None:
         with self._lock:
@@ -66,18 +78,65 @@ class SQLiteStore:
                     source_id TEXT NOT NULL,
                     message TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS manual_meter_readings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    meter_id TEXT NOT NULL,
+                    volume REAL NOT NULL,
+                    flow_rate REAL NOT NULL,
+                    notes TEXT,
+                    meter_data_id INTEGER,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS leak_localizations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    zone_id INTEGER NOT NULL,
+                    segment_id TEXT NOT NULL,
+                    upstream_meter TEXT,
+                    downstream_meter TEXT,
+                    confirmed INTEGER NOT NULL,
+                    confirmation_confidence REAL NOT NULL,
+                    distance_m_from_upstream REAL,
+                    segment_length_m REAL,
+                    position_ratio REAL,
+                    localization_confidence REAL,
+                    plan_x REAL,
+                    plan_y REAL,
+                    pressure_leak_score REAL,
+                    sensor_correlation REAL,
+                    trigger_sensor_id TEXT,
+                    meter_source TEXT
+                );
                 """
             )
             self._conn.commit()
 
-    def insert_meter_data(self, item: MeterDataIn) -> None:
+    def insert_meter_data(self, item: MeterDataIn) -> int:
+        with self._lock:
+            cur = self._conn.execute(
+                """
+                INSERT INTO meter_data(timestamp, meter_id, volume, flow_rate)
+                VALUES (?, ?, ?, ?)
+                """,
+                (item.timestamp.isoformat(), item.meter_id, item.volume, item.flow_rate),
+            )
+            self._conn.commit()
+            return int(cur.lastrowid)
+
+    def update_meter_data(self, row_id: int, item: MeterDataIn) -> None:
         self._execute_commit(
             """
-            INSERT INTO meter_data(timestamp, meter_id, volume, flow_rate)
-            VALUES (?, ?, ?, ?)
+            UPDATE meter_data
+            SET timestamp = ?, meter_id = ?, volume = ?, flow_rate = ?
+            WHERE id = ?
             """,
-            (item.timestamp.isoformat(), item.meter_id, item.volume, item.flow_rate),
+            (item.timestamp.isoformat(), item.meter_id, item.volume, item.flow_rate, row_id),
         )
+
+    def delete_meter_data(self, row_id: int) -> None:
+        self._execute_commit("DELETE FROM meter_data WHERE id = ?", (row_id,))
 
     def insert_pressure_data(self, item: PressureDataIn) -> None:
         self._execute_commit(
@@ -125,6 +184,47 @@ class SQLiteStore:
             ),
         )
 
+    def latest_meter_telemetry_by_id(self) -> dict[str, dict[str, Any]]:
+        filter_sql, params = self._meter_filter_sql()
+        rows = self._fetchall(
+            f"""
+            SELECT md.meter_id, md.timestamp, md.flow_rate, md.volume
+            FROM meter_data md
+            INNER JOIN (
+                SELECT meter_id, MAX(id) AS max_id
+                FROM meter_data
+                WHERE {filter_sql}
+                GROUP BY meter_id
+            ) latest ON md.id = latest.max_id
+            """,
+            tuple(params),
+        )
+        return {
+            str(row["meter_id"]): {
+                "last_reading_at": row["timestamp"],
+                "last_flow_rate": float(row["flow_rate"] or 0),
+                "last_volume": float(row["volume"] or 0),
+            }
+            for row in rows
+        }
+
+    def latest_anomaly_by_meter_id(self) -> dict[str, dict[str, Any]]:
+        filter_sql, params = self._meter_filter_sql()
+        rows = self._fetchall(
+            f"""
+            SELECT a.timestamp, a.meter_id, a.score, a.leak_probability
+            FROM anomalies a
+            INNER JOIN (
+                SELECT meter_id, MAX(id) AS max_id
+                FROM anomalies
+                WHERE {filter_sql}
+                GROUP BY meter_id
+            ) latest ON a.id = latest.max_id
+            """,
+            tuple(params),
+        )
+        return {str(row["meter_id"]): dict(row) for row in rows}
+
     def get_latest_anomalies(self, limit: int) -> list[dict]:
         rows = self._fetchall(
             """
@@ -138,7 +238,8 @@ class SQLiteStore:
     def get_latest_alerts(self, limit: int) -> list[dict]:
         rows = self._fetchall(
             """
-            SELECT timestamp, severity, category, source_id, message
+            SELECT id, timestamp, severity, category, source_id, message,
+                   COALESCE(status, 'active') AS status, admin_notes, resolved_at
             FROM alerts ORDER BY id DESC LIMIT ?
             """,
             (limit,),
@@ -158,8 +259,9 @@ class SQLiteStore:
         }
 
     def meter_kpis(self) -> dict[str, Any]:
-        row = self._conn.execute(
-            """
+        meter_filter, meter_params = self._meter_filter_sql()
+        row = self._fetchone(
+            f"""
             SELECT
                 COUNT(*) AS total_points,
                 COUNT(DISTINCT meter_id) AS distinct_meters,
@@ -167,12 +269,14 @@ class SQLiteStore:
                 COALESCE(MAX(flow_rate), 0.0) AS max_flow,
                 COALESCE(SUM(volume), 0.0) AS total_volume
             FROM meter_data
-            """
-        ).fetchone()
+            WHERE {meter_filter}
+            """,
+            tuple(meter_params),
+        )
         return dict(row)
 
     def sensor_kpis(self) -> dict[str, Any]:
-        row = self._conn.execute(
+        row = self._fetchone(
             """
             SELECT
                 COUNT(*) AS total_points,
@@ -182,38 +286,42 @@ class SQLiteStore:
                 COALESCE(MAX(intensity), 0.0) AS max_intensity
             FROM pressure_data
             """
-        ).fetchone()
+        )
         return dict(row)
 
     def top_anomalous_meters(self, limit: int = 6) -> list[dict]:
-        rows = self._conn.execute(
-            """
+        meter_filter, meter_params = self._meter_filter_sql()
+        rows = self._fetchall(
+            f"""
             SELECT meter_id, COUNT(*) AS anomaly_count, AVG(score) AS avg_score
             FROM anomalies
+            WHERE {meter_filter}
             GROUP BY meter_id
             ORDER BY anomaly_count DESC, avg_score DESC
             LIMIT ?
             """,
-            (limit,),
-        ).fetchall()
+            (*meter_params, limit),
+        )
         return [dict(row) for row in rows]
 
     def top_alert_sources(self, limit: int = 6) -> list[dict]:
-        rows = self._conn.execute(
-            """
+        meter_filter, meter_params = self._meter_filter_sql()
+        rows = self._fetchall(
+            f"""
             SELECT source_id, COUNT(*) AS alert_count
             FROM alerts
+            WHERE {meter_filter.replace('meter_id', 'source_id')}
             GROUP BY source_id
             ORDER BY alert_count DESC
             LIMIT ?
             """,
-            (limit,),
-        ).fetchall()
+            (*meter_params, limit),
+        )
         return [dict(row) for row in rows]
 
     def timeseries(self, bucket_minutes: int = 30, points: int = 24) -> list[dict]:
         bm = bucket_minutes
-        rows = self._conn.execute(
+        rows = self._fetchall(
             """
             WITH anomaly_buckets AS (
                 SELECT
@@ -291,14 +399,14 @@ class SQLiteStore:
             LIMIT ?
             """,
             (bm, bm, bm, bm, points),
-        ).fetchall()
+        )
         data = [dict(row) for row in rows]
         data.reverse()
         return data
 
     def anomaly_max_leak_by_bucket(self, bucket_minutes: int, points: int) -> list[dict]:
         bm = bucket_minutes
-        rows = self._conn.execute(
+        rows = self._fetchall(
             """
             SELECT
                 strftime(
@@ -315,13 +423,13 @@ class SQLiteStore:
             LIMIT ?
             """,
             (bm, bm, points),
-        ).fetchall()
+        )
         data = [dict(row) for row in rows]
         data.reverse()
         return data
 
     def meter_flow_timeseries(self, bucket_minutes: int = 60, points: int = 24) -> list[dict]:
-        rows = self._conn.execute(
+        rows = self._fetchall(
             """
             SELECT
                 strftime(
@@ -339,7 +447,7 @@ class SQLiteStore:
             LIMIT ?
             """,
             (bucket_minutes, bucket_minutes, points),
-        ).fetchall()
+        )
         data = [dict(row) for row in rows]
         data.reverse()
         leaks = self.anomaly_max_leak_by_bucket(bucket_minutes=bucket_minutes, points=points)
@@ -358,7 +466,7 @@ class SQLiteStore:
         if meter_order:
             meter_ids = list(meter_order)
         else:
-            top_rows = self._conn.execute(
+            top_rows = self._fetchall(
                 """
                 SELECT meter_id
                 FROM meter_data
@@ -367,7 +475,7 @@ class SQLiteStore:
                 LIMIT ?
                 """,
                 (limit_meters,),
-            ).fetchall()
+            )
             meter_ids = [str(row["meter_id"]) for row in top_rows]
         if not meter_ids:
             return {"buckets": [], "series": []}
@@ -391,7 +499,7 @@ class SQLiteStore:
             ORDER BY bucket ASC
         """
         params: list[Any] = [bucket_minutes, bucket_minutes, *meter_ids]
-        rows = self._conn.execute(sql, params).fetchall()
+        rows = self._fetchall(sql, tuple(params))
 
         by_meter: dict[str, dict[str, float]] = defaultdict(dict)
         all_buckets: set[str] = set()
@@ -411,7 +519,7 @@ class SQLiteStore:
         return {"buckets": tail, "series": series}
 
     def pressure_intensity_timeseries(self, bucket_minutes: int = 60, points: int = 24) -> list[dict]:
-        rows = self._conn.execute(
+        rows = self._fetchall(
             """
             SELECT
                 strftime(
@@ -430,7 +538,7 @@ class SQLiteStore:
             LIMIT ?
             """,
             (bucket_minutes, bucket_minutes, points),
-        ).fetchall()
+        )
         data = [dict(row) for row in rows]
         data.reverse()
         return data
@@ -442,7 +550,7 @@ class SQLiteStore:
         points: int = 48,
         recent_limit: int = 12,
     ) -> dict[str, Any]:
-        kpi_row = self._conn.execute(
+        kpi_row = self._fetchone(
             """
             SELECT
                 COUNT(*) AS total_points,
@@ -453,8 +561,8 @@ class SQLiteStore:
             WHERE meter_id = ?
             """,
             (meter_id,),
-        ).fetchone()
-        anomaly_row = self._conn.execute(
+        )
+        anomaly_row = self._fetchone(
             """
             SELECT
                 COUNT(*) AS anomaly_points,
@@ -466,10 +574,10 @@ class SQLiteStore:
             WHERE meter_id = ?
             """,
             (meter_id,),
-        ).fetchone()
+        )
         kpis = {**dict(kpi_row), **dict(anomaly_row)}
 
-        flow_rows = self._conn.execute(
+        flow_rows = self._fetchall(
             """
             WITH meter_buckets AS (
                 SELECT
@@ -513,11 +621,11 @@ class SQLiteStore:
             LIMIT ?
             """,
             (bucket_minutes, bucket_minutes, meter_id, bucket_minutes, bucket_minutes, meter_id, points),
-        ).fetchall()
+        )
         flow_series = [dict(row) for row in flow_rows]
         flow_series.reverse()
 
-        risk_rows = self._conn.execute(
+        risk_rows = self._fetchone(
             """
             SELECT
                 SUM(CASE WHEN leak_probability < 0.25 THEN 1 ELSE 0 END) AS normal,
@@ -532,10 +640,10 @@ class SQLiteStore:
             WHERE meter_id = ?
             """,
             (meter_id,),
-        ).fetchone()
+        )
         risk_distribution = dict(risk_rows)
 
-        anomaly_items = self._conn.execute(
+        anomaly_items = self._fetchall(
             """
             SELECT timestamp, meter_id, score, leak_probability
             FROM anomalies
@@ -544,8 +652,8 @@ class SQLiteStore:
             LIMIT ?
             """,
             (meter_id, recent_limit),
-        ).fetchall()
-        alert_items = self._conn.execute(
+        )
+        alert_items = self._fetchall(
             """
             SELECT timestamp, severity, category, source_id, message
             FROM alerts
@@ -554,7 +662,7 @@ class SQLiteStore:
             LIMIT ?
             """,
             (meter_id, recent_limit),
-        ).fetchall()
+        )
 
         return {
             "meter_id": meter_id,
@@ -568,27 +676,27 @@ class SQLiteStore:
         }
 
     def alert_stats(self) -> dict[str, Any]:
-        by_severity = self._conn.execute(
+        by_severity = self._fetchall(
             """
             SELECT severity, COUNT(*) AS count
             FROM alerts
             GROUP BY severity
             """
-        ).fetchall()
-        by_category = self._conn.execute(
+        )
+        by_category = self._fetchall(
             """
             SELECT category, COUNT(*) AS count
             FROM alerts
             GROUP BY category
             """
-        ).fetchall()
-        total = self._conn.execute("SELECT COUNT(*) AS n FROM alerts").fetchone()["n"]
-        last_24h = self._conn.execute(
+        )
+        total = self._fetchone("SELECT COUNT(*) AS n FROM alerts")["n"]
+        last_24h = self._fetchone(
             """
             SELECT COUNT(*) AS n FROM alerts
             WHERE datetime(timestamp) >= datetime('now', '-1 day')
             """
-        ).fetchone()["n"]
+        )["n"]
         return {
             "total": int(total),
             "last_24h": int(last_24h),
@@ -596,8 +704,16 @@ class SQLiteStore:
             "by_category": [dict(row) for row in by_category],
         }
 
+    def clear_meter_telemetry(self) -> None:
+        placeholders = ",".join("?" * len(NETWORK_METER_IDS))
+        with self._lock:
+            self._conn.execute("DELETE FROM meter_data")
+            self._conn.execute(f"DELETE FROM anomalies WHERE meter_id IN ({placeholders})", NETWORK_METER_IDS)
+            self._conn.execute(f"DELETE FROM alerts WHERE source_id IN ({placeholders})", NETWORK_METER_IDS)
+            self._conn.commit()
+
     def sensors_catalog(self) -> list[dict[str, Any]]:
-        rows = self._conn.execute(
+        rows = self._fetchall(
             """
             SELECT
                 sensor_id,
@@ -608,5 +724,180 @@ class SQLiteStore:
             GROUP BY sensor_id, zone
             ORDER BY sensor_id ASC
             """
-        ).fetchall()
+        )
         return [dict(row) for row in rows]
+
+    def list_manual_readings(self, limit: int = 10, meter_id: str | None = None) -> list[dict]:
+        if meter_id:
+            rows = self._fetchall(
+                """
+                SELECT id, timestamp, meter_id, volume, flow_rate, notes, meter_data_id,
+                       created_at, updated_at
+                FROM manual_meter_readings
+                WHERE meter_id = ?
+                ORDER BY datetime(timestamp) DESC, id DESC
+                LIMIT ?
+                """,
+                (meter_id, limit),
+            )
+        else:
+            rows = self._fetchall(
+                """
+                SELECT id, timestamp, meter_id, volume, flow_rate, notes, meter_data_id,
+                       created_at, updated_at
+                FROM manual_meter_readings
+                ORDER BY datetime(timestamp) DESC, id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+        return [dict(row) for row in rows]
+
+    def get_manual_reading(self, reading_id: int) -> dict | None:
+        row = self._fetchone(
+            """
+            SELECT id, timestamp, meter_id, volume, flow_rate, notes, meter_data_id,
+                   created_at, updated_at
+            FROM manual_meter_readings
+            WHERE id = ?
+            """,
+            (reading_id,),
+        )
+        return dict(row) if row else None
+
+    def insert_manual_reading(
+        self,
+        timestamp: str,
+        meter_id: str,
+        volume: float,
+        flow_rate: float,
+        notes: str,
+        meter_data_id: int | None,
+        created_at: str,
+        updated_at: str,
+    ) -> int:
+        with self._lock:
+            cur = self._conn.execute(
+                """
+                INSERT INTO manual_meter_readings(
+                    timestamp, meter_id, volume, flow_rate, notes,
+                    meter_data_id, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (timestamp, meter_id, volume, flow_rate, notes, meter_data_id, created_at, updated_at),
+            )
+            self._conn.commit()
+            return int(cur.lastrowid)
+
+    def update_manual_reading(
+        self,
+        reading_id: int,
+        timestamp: str,
+        meter_id: str,
+        volume: float,
+        flow_rate: float,
+        notes: str,
+        meter_data_id: int | None,
+        updated_at: str,
+    ) -> bool:
+        self._execute_commit(
+            """
+            UPDATE manual_meter_readings
+            SET timestamp = ?, meter_id = ?, volume = ?, flow_rate = ?, notes = ?,
+                meter_data_id = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (timestamp, meter_id, volume, flow_rate, notes, meter_data_id, updated_at, reading_id),
+        )
+        return self.get_manual_reading(reading_id) is not None
+
+    def delete_manual_reading(self, reading_id: int) -> dict | None:
+        row = self.get_manual_reading(reading_id)
+        if not row:
+            return None
+        self._execute_commit("DELETE FROM manual_meter_readings WHERE id = ?", (reading_id,))
+        return row
+
+    def latest_pressure_by_sensor_ids(self, sensor_ids: list[str]) -> dict[str, dict[str, Any]]:
+        if not sensor_ids:
+            return {}
+        placeholders = ",".join("?" * len(sensor_ids))
+        rows = self._fetchall(
+            f"""
+            SELECT p.sensor_id, p.timestamp, p.zone, p.pressure_signal, p.frequency, p.intensity
+            FROM pressure_data p
+            INNER JOIN (
+                SELECT sensor_id, MAX(id) AS max_id
+                FROM pressure_data
+                WHERE sensor_id IN ({placeholders})
+                GROUP BY sensor_id
+            ) latest ON p.id = latest.max_id
+            """,
+            tuple(sensor_ids),
+        )
+        return {str(row["sensor_id"]): dict(row) for row in rows}
+
+    def insert_leak_localization(self, record: dict[str, Any]) -> int:
+        with self._lock:
+            cur = self._conn.execute(
+                """
+                INSERT INTO leak_localizations(
+                    timestamp, zone_id, segment_id, upstream_meter, downstream_meter,
+                    confirmed, confirmation_confidence, distance_m_from_upstream,
+                    segment_length_m, position_ratio, localization_confidence,
+                    plan_x, plan_y, pressure_leak_score, sensor_correlation,
+                    trigger_sensor_id, meter_source
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    record["timestamp"],
+                    int(record["zone_id"]),
+                    record["segment_id"],
+                    record.get("upstream_meter"),
+                    record.get("downstream_meter"),
+                    1 if record.get("confirmed") else 0,
+                    float(record.get("confirmation_confidence") or 0),
+                    record.get("distance_m_from_upstream"),
+                    record.get("segment_length_m"),
+                    record.get("position_ratio"),
+                    record.get("localization_confidence"),
+                    record.get("plan_x"),
+                    record.get("plan_y"),
+                    record.get("pressure_leak_score"),
+                    record.get("sensor_correlation"),
+                    record.get("trigger_sensor_id"),
+                    record.get("meter_source"),
+                ),
+            )
+            self._conn.commit()
+            return int(cur.lastrowid)
+
+    def get_leak_localizations(self, limit: int = 20, confirmed_only: bool = False) -> list[dict[str, Any]]:
+        sql = """
+            SELECT *
+            FROM leak_localizations
+        """
+        if confirmed_only:
+            sql += " WHERE confirmed = 1"
+        sql += " ORDER BY id DESC LIMIT ?"
+        rows = self._fetchall(sql, (limit,))
+        items = []
+        for row in rows:
+            item = dict(row)
+            item["confirmed"] = bool(item.get("confirmed"))
+            items.append(item)
+        return items
+
+    def latest_leak_by_zone(self) -> dict[int, dict[str, Any]]:
+        rows = self._fetchall(
+            """
+            SELECT l.*
+            FROM leak_localizations l
+            INNER JOIN (
+                SELECT zone_id, MAX(id) AS max_id
+                FROM leak_localizations
+                GROUP BY zone_id
+            ) latest ON l.id = latest.max_id
+            """
+        )
+        return {int(row["zone_id"]): dict(row) for row in rows}

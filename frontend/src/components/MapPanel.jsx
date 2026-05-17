@@ -14,6 +14,13 @@ function toZoneImageCoords(zones) {
 
 function toAlertImageCoords(alerts) {
   return (alerts || []).map((alert, index) => {
+    if (alert.plan_x != null && alert.plan_y != null) {
+      return {
+        ...alert,
+        x: alert.plan_x,
+        y: alert.plan_y,
+      };
+    }
     const base = ZONE_PLAN_POINTS[alert.zone_id] || { x: 470, y: 500 };
     const spreadX = (index % 3) * 14 - 14;
     const spreadY = Math.floor(index / 3) * 10;
@@ -23,6 +30,12 @@ function toAlertImageCoords(alerts) {
       y: Math.max(30, Math.min(PLAN_HEIGHT - 30, base.y + spreadY)),
     };
   });
+}
+
+function zoneStatusColor(status) {
+  if (status === "leak_confirmed") return { color: "#c62828", fillColor: "#e53935", fillOpacity: 0.92 };
+  if (status === "investigating") return { color: "#ef6c00", fillColor: "#ff9800", fillOpacity: 0.9 };
+  return { color: "#3b82f6", fillColor: "#60a5fa", fillOpacity: 0.9 };
 }
 
 export function MapPanel({ zones, alerts, title = "Cartographie du reseau", caption }) {
@@ -50,10 +63,20 @@ export function MapPanel({ zones, alerts, title = "Cartographie du reseau", capt
             <CircleMarker
               key={zone.id}
               center={[zone.y, zone.x]}
-              radius={7}
-              pathOptions={{ color: "#3b82f6", fillColor: "#60a5fa", fillOpacity: 0.9 }}
+              radius={zone.status === "leak_confirmed" ? 9 : 7}
+              pathOptions={zoneStatusColor(zone.status)}
             >
-              <Popup>{zone.name}</Popup>
+              <Popup>
+                <strong>{zone.name}</strong>
+                <br />
+                Etat zone : {zone.status === "leak_confirmed" ? "Fuite confirmee" : zone.status === "investigating" ? "Analyse" : "Normal"}
+                {zone.segment ? (
+                  <>
+                    <br />
+                    Troncon : {zone.segment.upstream_meter} → {zone.segment.downstream_meter}
+                  </>
+                ) : null}
+              </Popup>
             </CircleMarker>
           ))}
 
@@ -64,7 +87,13 @@ export function MapPanel({ zones, alerts, title = "Cartographie du reseau", capt
                 <br />
                 {alert.message}
                 <br />
-                Gravité: {alert.severity}
+                {alert.distance_m_from_upstream != null ? (
+                  <>
+                    Distance : {Number(alert.distance_m_from_upstream).toFixed(0)} m depuis {alert.upstream_meter}
+                    <br />
+                  </>
+                ) : null}
+                Gravite : {alert.severity}
               </Popup>
             </Marker>
           ))}

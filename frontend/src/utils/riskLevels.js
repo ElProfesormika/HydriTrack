@@ -6,12 +6,26 @@ export const RISK_COLORS = {
   critical: "#c62828",
 };
 
-export function pointColorFromLeak(probability) {
+export function riskFromLeak(probability) {
   const p = Number(probability) || 0;
-  if (p >= 0.75) return RISK_COLORS.critical;
-  if (p >= 0.5) return RISK_COLORS.warning;
-  if (p >= 0.25) return RISK_COLORS.caution;
-  return RISK_COLORS.normal;
+  if (p >= 0.75) return "critical";
+  if (p >= 0.5) return "warning";
+  if (p >= 0.25) return "caution";
+  return "normal";
+}
+
+export function riskLabel(risk) {
+  const labels = {
+    normal: "Normal",
+    caution: "Vigilance",
+    warning: "Attention",
+    critical: "Critique",
+  };
+  return labels[risk] || "Normal";
+}
+
+export function pointColorFromLeak(probability) {
+  return RISK_COLORS[riskFromLeak(probability)] || RISK_COLORS.normal;
 }
 
 export function barColorFromAvgScore(score) {

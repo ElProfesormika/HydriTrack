@@ -21,6 +21,28 @@ async function requestPost(path, body) {
   return response.json();
 }
 
+async function requestPut(path, body) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`Erreur API ${response.status} sur ${path} ${text}`.trim());
+  }
+  return response.json();
+}
+
+async function requestDelete(path) {
+  const response = await fetch(`${API_BASE}${path}`, { method: "DELETE" });
+  if (!response.ok) {
+    const text = await response.text().catch(() => "");
+    throw new Error(`Erreur API ${response.status} sur ${path} ${text}`.trim());
+  }
+  return response.json();
+}
+
 export const hydroApi = {
   getOverview: () => request("/api/dashboard/overview"),
   getTimeSeries: (bucketMinutes = 30, points = 24) =>
@@ -36,10 +58,27 @@ export const hydroApi = {
       )}?bucket_minutes=${bucketMinutes}&points=${points}&recent_limit=${recentLimit}`
     ),
   postMeterData: (payload) => requestPost("/api/meters/data", payload),
+  getMeterReadings: (limit = 10, meterId) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (meterId) params.set("meter_id", meterId);
+    return request(`/api/meter-readings?${params}`);
+  },
+  getMeterReading: (id) => request(`/api/meter-readings/${id}`),
+  createMeterReading: (payload) => requestPost("/api/meter-readings", payload),
+  updateMeterReading: (id, payload) => requestPut(`/api/meter-readings/${id}`, payload),
+  deleteMeterReading: (id) => requestDelete(`/api/meter-readings/${id}`),
   getPressureSeries: (bucketMinutes = 60, points = 24) =>
     request(`/api/dashboard/pressure-series?bucket_minutes=${bucketMinutes}&points=${points}`),
   getAlertStats: () => request("/api/dashboard/alert-stats"),
   getSensorsCatalog: () => request("/api/dashboard/sensors-catalog"),
+  getZoneSensors: () => request("/api/dashboard/zone-sensors"),
+  getNetworkTopology: () => request("/api/network/topology"),
+  getLeakLocalizations: (limit = 20, confirmedOnly = false) => {
+    const params = new URLSearchParams({ limit: String(limit) });
+    if (confirmedOnly) params.set("confirmed_only", "true");
+    return request(`/api/leaks/localizations?${params}`);
+  },
+  postPressureData: (payload) => requestPost("/api/sensors/pressure", payload),
   getAlerts: (limit = 15) => request(`/api/alerts?limit=${limit}`),
   getAnomalies: (limit = 15) => request(`/api/anomalies?limit=${limit}`),
   getMapZones: () => request("/api/map/zones"),
